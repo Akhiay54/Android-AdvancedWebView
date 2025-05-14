@@ -43,6 +43,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebChromeClient.CustomViewCallback;
+import android.webkit.WebChromeClient.FileChooserParams;
 import android.webkit.WebViewClient;
 import android.webkit.WebSettings;
 import android.annotation.SuppressLint;
@@ -152,6 +154,7 @@ public class AdvancedWebView extends WebView {
 	@Override
 	public void setWebChromeClient(final WebChromeClient client) {
 		mCustomWebChromeClient = client;
+		super.setWebChromeClient(client);
 	}
 
 	@SuppressLint("SetJavaScriptEnabled")
@@ -740,19 +743,38 @@ public class AdvancedWebView extends WebView {
 				openFileChooser(uploadMsg, acceptType, null);
 			}
 
-			// file upload callback (Android 4.1 (API level 16) -- Android 4.3 (API level 18)) (hidden method)
+			/**
+			 * File upload callback handler for Android 4.1-4.3 (API levels 16-18)
+			 * Enhanced to properly handle file type filtering based on acceptType parameter
+			 */
 			@SuppressWarnings("unused")
 			public void openFileChooser(ValueCallback<Uri> uploadMsg, String acceptType, String capture) {
-				openFileInput(uploadMsg, null, false);
+				// Pass acceptType as an array to support proper MIME type filtering
+				openFileInput(uploadMsg, null, false, acceptType != null ? new String[] { acceptType } : new String[] { "*/*" });
 			}
 
-			// file upload callback (Android 5.0 (API level 21) -- current) (public method)
+			/**
+			 * File chooser implementation for Android 5.0+ (API level 21+)
+			 * Enhanced to properly clear previous callbacks and support MIME type filtering
+			 */
 			@SuppressWarnings("all")
-			public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, WebChromeClient.FileChooserParams fileChooserParams) {
+			public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+				// Clear any existing callback to prevent memory leaks
+				if (mFileUploadCallbackSecond != null) {
+					mFileUploadCallbackSecond.onReceiveValue(null);
+				}
+				// Store the new callback
+				mFileUploadCallbackSecond = filePathCallback;
+
+				// Delegate to custom implementation if available
+				if (mCustomWebChromeClient != null) {
+					return mCustomWebChromeClient.onShowFileChooser(webView, filePathCallback, fileChooserParams);
+				}
+
 				if (Build.VERSION.SDK_INT >= 21) {
 					final boolean allowMultiple = fileChooserParams.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
-
-					openFileInput(null, filePathCallback, allowMultiple);
+					// Use accept types from parameters for proper MIME type filtering
+					openFileInput(null, filePathCallback, allowMultiple, fileChooserParams.getAcceptTypes());
 
 					return true;
 				}
@@ -1224,6 +1246,19 @@ public class AdvancedWebView extends WebView {
 
 	@SuppressLint("NewApi")
 	protected void openFileInput(final ValueCallback<Uri> fileUploadCallbackFirst, final ValueCallback<Uri[]> fileUploadCallbackSecond, final boolean allowMultiple) {
+		openFileInput(fileUploadCallbackFirst, fileUploadCallbackSecond, allowMultiple, null);
+	}
+
+	/**
+	 * Opens a file input dialog that supports MIME type filtering
+	 *
+	 * @param fileUploadCallbackFirst Callback for older Android versions (pre-Lollipop)
+	 * @param fileUploadCallbackSecond Callback for Android Lollipop and above
+	 * @param allowMultiple Whether to allow selection of multiple files
+	 * @param acceptTypes Array of acceptable MIME types for filtering
+	 */
+	@SuppressLint("NewApi")
+	protected void openFileInput(final ValueCallback<Uri> fileUploadCallbackFirst, final ValueCallback<Uri[]> fileUploadCallbackSecond, final boolean allowMultiple, final String[] acceptTypes) {
 		if (mFileUploadCallbackFirst != null) {
 			mFileUploadCallbackFirst.onReceiveValue(null);
 		}
@@ -1243,6 +1278,11 @@ public class AdvancedWebView extends WebView {
 			}
 		}
 
+		if (acceptTypes != null) {
+			i.putExtra(Intent.EXTRA_MIME_TYPES, acceptTypes);
+		}
+
+		// set MIME type to filter filetype, default is "*/*"
 		i.setType(mUploadableFileTypes);
 
 		if (mFragment != null && mFragment.get() != null && Build.VERSION.SDK_INT >= 11) {
